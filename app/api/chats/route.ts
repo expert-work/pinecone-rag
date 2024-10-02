@@ -32,15 +32,17 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const cookieStore = cookies();
-  const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+  const supabase = createRouteHandlerClient({ cookies });
 
   try {
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
+      console.error('POST /api/chats: No authenticated user found');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    console.log('POST /api/chats: Authenticated user', user.id);
 
     const { forceNew } = await req.json();
 
@@ -51,18 +53,29 @@ export async function POST(req: NextRequest) {
       });
 
       if (existingChat) {
+        console.log('POST /api/chats: Returning existing chat', existingChat.id);
         return NextResponse.json(existingChat);
       }
     }
 
+    console.log('POST /api/chats: Creating new chat for user', user.id);
     const newChat = await prisma.chat.create({
       data: { userId: user.id },
     });
 
+    console.log('POST /api/chats: New chat created', newChat.id);
     return NextResponse.json(newChat);
-  } catch (error) {
-    console.error('Error creating chat:', error);
-    return NextResponse.json({ error: 'Failed to create chat' }, { status: 500 });
+  } catch (error: unknown) {
+    console.error('Error in POST /api/chats:', error);
+    
+    let errorMessage = 'An unknown error occurred';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+    
+    return NextResponse.json({ error: 'Failed to create chat', details: errorMessage }, { status: 500 });
   }
 }
 

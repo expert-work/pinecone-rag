@@ -260,12 +260,12 @@ const ChatBot: React.FC = () => {
 
   const createAndSetNewChat = async () => {
     try {
-      const response = await fetch('/api/chats', { 
+      const response = await fetch('/api/chats', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ forceNew: true })
+        body: JSON.stringify({ forceNew: true }),
       });
 
       if (!response.ok) {
