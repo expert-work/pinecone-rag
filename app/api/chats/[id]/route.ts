@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { getUser } from '@/app/lib/auth';
+import { getUser } from '@/app/lib/auth-server';
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const user = await getUser();
     if (!user) {
@@ -12,7 +12,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const chatId = params.id;
 
     const chat = await prisma.chat.findUnique({
-      where: { id: chatId, userId: user.id },
+      where: { 
+        id: chatId,
+        userId: user.id  // Ensure the chat belongs to the current user
+      },
       include: {
         messages: {
           orderBy: { createdAt: 'asc' },

@@ -1,30 +1,17 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/app/lib/prisma';
-import { getUser } from '@/app/lib/auth';
-import { PrismaClient } from '@prisma/client';
+import { NextRequest, NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-
-async function withPrisma<T>(operation: (prisma: PrismaClient) => Promise<T>): Promise<T> {
-  try {
-    await prisma.$connect();
-    return await operation(prisma);
-  } finally {
-    await prisma.$disconnect();
-  }
-}
+import { prisma } from '@/app/lib/prisma';
 
 export async function GET() {
-  return withPrisma(async (prisma) => {
-    const supabase = createRouteHandlerClient({ cookies });
+  const supabase = createRouteHandlerClient({ cookies });
+
+  try {
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
-      console.log('User not found');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
-    console.log('User ID:', user.id);
 
     const chats = await prisma.chat.findMany({
       where: { userId: user.id },
@@ -37,78 +24,71 @@ export async function GET() {
       orderBy: { createdAt: 'desc' },
     });
 
-    console.log('Fetched chats:', JSON.stringify(chats, null, 2));
-
     return NextResponse.json(chats);
-  });
+  } catch (error) {
+    console.error('Error in GET /api/chats:', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
 }
 
-export async function POST(request: Request) {
-  return withPrisma(async (prisma) => {
-    const supabase = createRouteHandlerClient({ cookies });
+export async function POST(req: NextRequest) {
+  const cookieStore = cookies();
+  const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+  try {
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
-      console.log('User not found');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { forceNew } = await request.json();
+    const { forceNew } = await req.json();
 
     if (!forceNew) {
-      console.log('Checking for existing chats for user ID:', user.id);
-
       const existingChat = await prisma.chat.findFirst({
         where: { userId: user.id },
         orderBy: { createdAt: 'desc' },
       });
 
       if (existingChat) {
-        console.log('Existing chat found:', existingChat.id);
         return NextResponse.json(existingChat);
       }
     }
-
-    console.log('Creating new chat for user ID:', user.id);
 
     const newChat = await prisma.chat.create({
       data: { userId: user.id },
     });
 
-    console.log('Created new chat:', JSON.stringify(newChat, null, 2));
-
     return NextResponse.json(newChat);
-  });
+  } catch (error) {
+    console.error('Error creating chat:', error);
+    return NextResponse.json({ error: 'Failed to create chat' }, { status: 500 });
+  }
 }
 
 export async function DELETE() {
-  return withPrisma(async (prisma) => {
-    try {
-      const user = await getUser();
-      if (!user) {
-        console.log('User not found');
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
+  const cookieStore = cookies();
+  const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
 
-      const deletedChats = await prisma.chat.deleteMany({
-        where: {
-          userId: user.id,
-          messages: {
-            none: {}
-          }
-        }
-      });
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
 
-      console.log(`Deleted ${deletedChats.count} empty chats for user ID:`, user.id);
-
-      return NextResponse.json({ deletedCount: deletedChats.count });
-    } catch (error) {
-      console.error('Error deleting empty chats:', error);
-      if (error instanceof Error) {
-        return NextResponse.json({ error: 'Failed to delete empty chats', details: error.message }, { status: 500 });
-      } else {
-        return NextResponse.json({ error: 'Failed to delete empty chats', details: 'Unknown error occurred' }, { status: 500 });
-      }
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-  });
+
+    const deletedChats = await prisma.chat.deleteMany({
+      where: {
+        userId: user.id,
+        messages: {
+          none: {}
+        }
+      }
+    });
+
+    return NextResponse.json({ deletedCount: deletedChats.count });
+  } catch (error) {
+    console.error('Error deleting empty chats:', error);
+    return NextResponse.json({ error: 'Failed to delete empty chats' }, { status: 500 });
+  }
 }

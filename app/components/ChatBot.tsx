@@ -4,7 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useChat, Message } from 'ai/react';
 import JobDetails from './JobDetails';
 import { useRouter } from 'next/navigation';
-import { useSupabaseClient, useUser } from '@supabase/auth-helpers-react';
+import { getUser, signOut, supabase } from '@/app/lib/auth-client';
+import { User } from '@supabase/supabase-js';
 
 interface Chat {
   id: string;
@@ -37,17 +38,35 @@ const ChatBot: React.FC = () => {
   const [isJobDetailsOpen, setIsJobDetailsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const supabaseClient = useSupabaseClient();
-  const user = useUser();
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
-    if (user) {
-      fetchChats();
-      setIsPageLoaded(true);
-    } else {
-      router.push('/login');
-    }
-  }, [user, router]);
+    const checkUser = async () => {
+      const currentUser = await getUser();
+      if (currentUser) {
+        setUser(currentUser);
+        fetchChats();
+        setIsPageLoaded(true);
+      } else {
+        router.push('/login');
+      }
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') {
+        checkUser();
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        router.push('/login');
+      }
+    });
+
+    checkUser();
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [router]);
 
   useEffect(() => {
     if (isPageLoaded && user && !isInitialized) {
@@ -97,10 +116,17 @@ const ChatBot: React.FC = () => {
 
   const fetchChats = async () => {
     try {
-      const response = await fetch('/api/chats');
-      if (!response.ok) throw new Error('Failed to fetch chats');
-      const data = await response.json();
-      setChats(data);
+      const response = await fetch('/api/chats', {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch chats');
+      }
+      const chats = await response.json();
+      setChats(chats);
     } catch (error) {
       console.error('Error fetching chats:', error);
     }
@@ -228,7 +254,7 @@ const ChatBot: React.FC = () => {
   };
 
   const handleLogout = async () => {
-    await supabaseClient.auth.signOut();
+    await signOut();
     router.push('/login');
   };
 

@@ -1,20 +1,15 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest } from 'next/server';
 import { OpenAIStream, StreamingTextResponse } from 'ai';
-import { Pinecone } from '@pinecone-database/pinecone';
+import { Pinecone, RecordMetadata, Index } from '@pinecone-database/pinecone';
 import { openai } from '@/app/lib/openai';
-import { getUser } from '@/app/lib/auth';
+import { getUser } from '@/app/lib/auth-server';
 import { prisma } from '@/app/lib/prisma';
 
-const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME;
+const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME ?? '';
 
- 
-
-interface PineconeMatch {
-  metadata?: {
-    text?: string;
-  };
-}
+type PineconeMetadata = RecordMetadata & {
+  text: string;
+};
 
 export async function POST(req: NextRequest) {
   const user = await getUser();
@@ -62,7 +57,7 @@ export async function POST(req: NextRequest) {
       systemMessage = { role: 'system', content: getRandomGeneralSystemMessage() };
     } else {
       const pinecone = new Pinecone();
-      const index = pinecone.Index(PINECONE_INDEX_NAME);
+      const index = pinecone.Index<PineconeMetadata>(PINECONE_INDEX_NAME);
       const relevantDocs = await retrieveDocumentsFromPinecone(index, query);
 
       if (relevantDocs.length === 0) {
@@ -82,7 +77,7 @@ export async function POST(req: NextRequest) {
       model: 'gpt-4',
       stream: true,
       messages: [systemMessage, ...messages],
-      temperature: 0.7, // Add some randomness to the responses
+      temperature: 0.7,
     });
 
     const stream = OpenAIStream(response, {
@@ -118,7 +113,7 @@ function isGeneralQuery(query: string): boolean {
   return generalPatterns.some(pattern => pattern.test(query));
 }
 
-async function retrieveDocumentsFromPinecone(index: any, query: string) {
+async function retrieveDocumentsFromPinecone(index: Index<PineconeMetadata>, query: string) {
   const queryEmbedding = await getEmbedding(query);
 
   const queryResponse = await index.query({
@@ -127,9 +122,11 @@ async function retrieveDocumentsFromPinecone(index: any, query: string) {
     includeMetadata: true,
   });
 
-  return (queryResponse.matches as PineconeMatch[])
-    .filter(match => match.metadata && typeof match.metadata.text === 'string')
-    .map(match => match.metadata!.text!);
+  return queryResponse.matches
+    .filter((match): match is (typeof match & { metadata: PineconeMetadata }) => 
+      match.metadata !== undefined && typeof match.metadata.text === 'string'
+    )
+    .map(match => match.metadata.text);
 }
 
 async function getEmbedding(text: string) {
@@ -140,7 +137,6 @@ async function getEmbedding(text: string) {
   return response.data[0].embedding;
 }
 
-// Add these new functions at the end of the file
 function getRandomGeneralSystemMessage(): string {
   const messages = [
     "You are a friendly and helpful assistant. Engage in natural conversation while providing accurate information.",
