@@ -71,24 +71,24 @@ const ChatBot: React.FC = () => {
 
   const initializeChat = async () => {
     setIsLoading(true);
-    const storedChatId = localStorage.getItem('currentChatId');
-    if (storedChatId) {
-      try {
-        await loadChat(storedChatId);
-      } catch (error) {
-        console.error('Error loading chat:', error);
+    try {
+      const storedChatId = localStorage.getItem('currentChatId');
+      if (storedChatId) {
+        try {
+          await loadChat(storedChatId);
+        } catch (error) {
+          console.error('Error loading chat:', error);
+          await createAndSetNewChat();
+        }
+      } else {
         await createAndSetNewChat();
       }
-    } else if (chats.length > 0) {
-      const newChatId = chats[0].id;
-      setCurrentChatId(newChatId);
-      localStorage.setItem('currentChatId', newChatId);
-      await loadChat(newChatId);
-    } else {
-      await createAndSetNewChat();
+    } catch (error) {
+      console.error('Error initializing chat:', error);
+    } finally {
+      setIsInitialized(true);
+      setIsLoading(false);
     }
-    setIsInitialized(true);
-    setIsLoading(false);
   };
 
   const scrollToBottom = () => {
