@@ -23,7 +23,7 @@ interface Job {
   experience_requirements: string;
   education_requirements: string;
 }
-
+ 
 const ChatBot: React.FC = () => {
   const { messages, append, setMessages, isLoading: isAIProcessing } = useChat();
   const [isAITyping, setIsAITyping] = useState(false);
