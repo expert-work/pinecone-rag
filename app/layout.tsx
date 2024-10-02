@@ -1,6 +1,7 @@
 import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 import { SupabaseProvider } from './components/SupabaseProvider';
+import { ClientThemeProvider } from './ClientThemeProvider';
 import { Inter } from 'next/font/google';
 import './globals.css';
 
@@ -26,7 +27,9 @@ export default async function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         <SupabaseProvider session={session}>
-          {children}
+          <ClientThemeProvider>
+            {children}
+          </ClientThemeProvider>
         </SupabaseProvider>
       </body>
     </html>
