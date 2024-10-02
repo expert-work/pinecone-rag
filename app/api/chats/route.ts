@@ -46,33 +46,42 @@ export async function POST(req: NextRequest) {
 
     const { forceNew } = await req.json();
 
-    if (!forceNew) {
-      const existingChat = await prisma.chat.findFirst({
-        where: { userId: user.id },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      if (existingChat) {
-        console.log('POST /api/chats: Returning existing chat', existingChat.id);
-        return NextResponse.json(existingChat);
-      }
-    }
-
-    console.log('POST /api/chats: Creating new chat for user', user.id);
-    const newChat = await prisma.chat.create({
-      data: { userId: user.id },
+    // Check for existing chat
+    const existingChat = await prisma.chat.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: 'desc' },
     });
 
-    console.log('POST /api/chats: New chat created', newChat.id);
-    return NextResponse.json(newChat);
+    if (existingChat && !forceNew) {
+      console.log('POST /api/chats: Returning existing chat', existingChat.id);
+      return NextResponse.json(existingChat);
+    }
+
+    // If no existing chat or forceNew is true, create a new chat
+    if (!existingChat || forceNew) {
+      console.log('POST /api/chats: Creating new chat for user', user.id);
+      const newChat = await prisma.chat.create({
+        data: { userId: user.id },
+      });
+
+      console.log('POST /api/chats: New chat created', newChat.id);
+      return NextResponse.json(newChat);
+    }
+
+    // This line should never be reached, but TypeScript likes it
+    return NextResponse.json({ error: 'Unexpected state' }, { status: 500 });
+
   } catch (error: unknown) {
     console.error('Error in POST /api/chats:', error);
     
     let errorMessage = 'An unknown error occurred';
     if (error instanceof Error) {
       errorMessage = error.message;
+      console.error('Error details:', error.stack);
     } else if (typeof error === 'string') {
       errorMessage = error;
+    } else {
+      console.error('Unexpected error type:', typeof error);
     }
     
     return NextResponse.json({ error: 'Failed to create chat', details: errorMessage }, { status: 500 });
