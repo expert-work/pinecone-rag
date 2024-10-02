@@ -33,6 +33,8 @@ const ChatBot: React.FC = () => {
   const [isPageLoaded, setIsPageLoaded] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isJobDetailsOpen, setIsJobDetailsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const supabaseClient = useSupabaseClient();
@@ -60,7 +62,7 @@ const ChatBot: React.FC = () => {
   useEffect(() => {
     if (isAIProcessing) {
       setIsAITyping(false);
-      const typingTimeout = setTimeout(() => setIsAITyping(true), 1000); // Assume AI starts typing after 1 second
+      const typingTimeout = setTimeout(() => setIsAITyping(true), 1000);
       return () => clearTimeout(typingTimeout);
     } else {
       setIsAITyping(false);
@@ -69,10 +71,10 @@ const ChatBot: React.FC = () => {
 
   const initializeChat = async () => {
     setIsLoading(true);
-    const sessionChatId = sessionStorage.getItem('currentChatId');
-    if (sessionChatId) {
+    const storedChatId = localStorage.getItem('currentChatId');
+    if (storedChatId) {
       try {
-        await loadChat(sessionChatId);
+        await loadChat(storedChatId);
       } catch (error) {
         console.error('Error loading chat:', error);
         await createAndSetNewChat();
@@ -80,7 +82,7 @@ const ChatBot: React.FC = () => {
     } else if (chats.length > 0) {
       const newChatId = chats[0].id;
       setCurrentChatId(newChatId);
-      sessionStorage.setItem('currentChatId', newChatId);
+      localStorage.setItem('currentChatId', newChatId);
       await loadChat(newChatId);
     } else {
       await createAndSetNewChat();
@@ -165,7 +167,7 @@ const ChatBot: React.FC = () => {
   const updateChat = async (chatId: string, messages: Message[]) => {
     try {
       await saveMessages(chatId, messages);
-      fetchChats(); // Refresh the chat list after updating
+      fetchChats();
     } catch (error) {
       console.error('Error updating chat:', error);
     }
@@ -248,15 +250,15 @@ const ChatBot: React.FC = () => {
 
       const newChat = await response.json();
       setCurrentChatId(newChat.id);
-      sessionStorage.setItem('currentChatId', newChat.id);
+      localStorage.setItem('currentChatId', newChat.id);
       setMessages([]);
       setSelectedJob(null);
-      await fetchChats(); // Refresh the chat list
+      await fetchChats();
       return newChat.id;
     } catch (error) {
       console.error('Error creating new chat:', error);
       setCurrentChatId(null);
-      sessionStorage.removeItem('currentChatId');
+      localStorage.removeItem('currentChatId');
       return null;
     }
   };
@@ -264,7 +266,6 @@ const ChatBot: React.FC = () => {
   const startNewConversation = async () => {
     setIsLoading(true);
     try {
-      // Delete empty chats
       const deleteResponse = await fetch('/api/chats', { method: 'DELETE' });
       if (!deleteResponse.ok) {
         console.error('Failed to delete empty chats');
@@ -273,7 +274,6 @@ const ChatBot: React.FC = () => {
         console.log(`Deleted ${deleteData.deletedCount} empty chats`);
       }
 
-      // Create new chat
       await createAndSetNewChat();
     } catch (error) {
       console.error('Error starting new conversation:', error);
@@ -284,9 +284,17 @@ const ChatBot: React.FC = () => {
 
   const selectChat = async (chat: Chat) => {
     setCurrentChatId(chat.id);
-    sessionStorage.setItem('currentChatId', chat.id);
+    localStorage.setItem('currentChatId', chat.id);
     await loadChat(chat.id);
     setSelectedJob(null);
+  };
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
+  };
+
+  const toggleJobDetails = () => {
+    setIsJobDetailsOpen(!isJobDetailsOpen);
   };
 
   if (isLoading) {
@@ -302,12 +310,28 @@ const ChatBot: React.FC = () => {
   }
 
   return (
-    <div className="flex h-screen bg-white">
+    <div className="flex flex-col h-screen bg-white md:flex-row">
+      {/* Mobile header */}
+      <div className="md:hidden flex justify-between items-center p-4 bg-gray-100 border-b border-gray-300">
+        <button onClick={toggleSidebar} className="text-black">
+          ☰ Menu
+        </button>
+        <h1 className="text-xl font-bold">AI Chat Bot</h1>
+        {selectedJob && (
+          <button onClick={toggleJobDetails} className="text-black">
+            Job Details
+          </button>
+        )}
+      </div>
+
       {/* Sidebar */}
-      <div className="w-64 bg-gray-100 text-black p-4 overflow-y-auto border-r border-gray-300">
+      <div className={`w-full md:w-64 bg-gray-100 text-black p-4 overflow-y-auto border-r border-gray-300 ${isSidebarOpen ? 'block' : 'hidden'} md:block`}>
         <h2 className="text-xl font-bold mb-4">Conversations</h2>
         <button
-          onClick={startNewConversation}
+          onClick={() => {
+            startNewConversation();
+            setIsSidebarOpen(false);
+          }}
           className="w-full p-2 mb-4 bg-black text-white rounded hover:bg-gray-800 transition-colors"
         >
           New Conversation
@@ -316,7 +340,10 @@ const ChatBot: React.FC = () => {
           <div
             key={chat.id}
             className={`p-2 hover:bg-gray-200 cursor-pointer rounded transition-colors ${chat.id === currentChatId ? 'bg-gray-300' : ''}`}
-            onClick={() => selectChat(chat)}
+            onClick={() => {
+              selectChat(chat);
+              setIsSidebarOpen(false);
+            }}
           >
             {chat.messages[0]?.content.substring(0, 30)}...
           </div>
@@ -370,7 +397,7 @@ const ChatBot: React.FC = () => {
 
       {/* Job details sidebar */}
       {selectedJob && (
-        <div className="w-1/3 p-4 bg-white border-l border-gray-300 overflow-y-auto">
+        <div className={`w-full md:w-1/3 p-4 bg-white border-l border-gray-300 overflow-y-auto ${isJobDetailsOpen ? 'block' : 'hidden'} md:block`}>
           <JobDetails job={selectedJob} />
         </div>
       )}

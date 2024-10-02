@@ -29,13 +29,6 @@ export async function GET() {
     return NextResponse.json(chats);
   } catch (error) {
     console.error('Error fetching chats:', error);
-    if (error instanceof Error) {
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    } else {
-      console.error('Unknown error:', error);
-    }
     return NextResponse.json({ error: 'Failed to fetch chats', details: error instanceof Error ? error.message : String(error) }, { status: 500 });
   } finally {
     await prisma.$disconnect();
