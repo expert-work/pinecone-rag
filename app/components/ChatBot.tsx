@@ -7,7 +7,7 @@ import { DBMessage, Message, Chat } from '@/types/chat';
 import { User } from '@supabase/supabase-js';
 import { useChat } from 'ai/react';
 import { v4 as uuidv4 } from 'uuid';
-import { PlusIcon, PaperAirplaneIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PaperAirplaneIcon, ChatBubbleLeftIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
 
 const CHATS_PER_PAGE = 10;
 
@@ -17,15 +17,10 @@ const ChatBot = () => {
   const [chats, setChats] = useState<Chat[]>([]);
   const [lastChatId, setLastChatId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatListRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  const toggleSidebar = () => {
-    setIsSidebarOpen(!isSidebarOpen);
-  };
 
   const { messages, input, handleInputChange, handleSubmit, setMessages, isLoading } = useChat({
     api: '/api/chat',
@@ -323,6 +318,19 @@ const ChatBot = () => {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+      router.push('/login');
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
+  };
+
   return (
     <div className="flex h-screen bg-white text-black">
       {/* Mobile sidebar toggle */}
@@ -338,7 +346,7 @@ const ChatBot = () => {
         ref={chatListRef}
         className={`${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } md:translate-x-0 fixed md:static inset-y-0 left-0 w-64 md:w-80 bg-gray-50 p-4 overflow-y-auto border-r border-gray-200 shadow-lg transition-transform duration-300 ease-in-out z-10`}
+        } md:translate-x-0 fixed md:static inset-y-0 left-0 w-64 md:w-80 bg-gray-50 p-4 overflow-y-auto border-r border-gray-200 shadow-lg transition-transform duration-300 ease-in-out z-10 flex flex-col`}
       >
         <button
           onClick={createNewChat}
@@ -347,36 +355,45 @@ const ChatBot = () => {
           <PlusIcon className="w-5 h-5" />
           <span>New Chat</span>
         </button>
-        {chats.length === 0 ? (
-          <p className="text-gray-500 italic text-center">No chats available</p>
-        ) : (
-          <div className="space-y-2">
-            {chats.map((chat) => (
-              <div
-                key={chat.id}
-                onClick={() => {
-                  loadChat(chat.id);
-                  setIsSidebarOpen(false);
-                }}
-                className={`p-3 cursor-pointer rounded-lg transition-all duration-200 ease-in-out ${
-                  chat.id === currentChatId 
-                    ? 'bg-gray-200 shadow-inner' 
-                    : 'hover:bg-gray-100'
-                }`}
-              >
-                {getChatTitle(chat)}
-              </div>
-            ))}
-          </div>
-        )}
-        {hasMore && (
-          <button 
-            onClick={loadMoreChats}
-            className="w-full p-2 mt-4 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-all duration-200 ease-in-out"
-          >
-            Load More
-          </button>
-        )}
+        <div className="flex-grow">
+          {chats.length === 0 ? (
+            <p className="text-gray-500 italic text-center">No chats available</p>
+          ) : (
+            <div className="space-y-2">
+              {chats.map((chat) => (
+                <div
+                  key={chat.id}
+                  onClick={() => {
+                    loadChat(chat.id);
+                    setIsSidebarOpen(false);
+                  }}
+                  className={`p-3 cursor-pointer rounded-lg transition-all duration-200 ease-in-out ${
+                    chat.id === currentChatId 
+                      ? 'bg-gray-200 shadow-inner' 
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  {getChatTitle(chat)}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasMore && (
+            <button 
+              onClick={loadMoreChats}
+              className="w-full p-2 mt-4 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-all duration-200 ease-in-out"
+            >
+              Load More
+            </button>
+          )}
+        </div>
+        <button
+          onClick={handleLogout}
+          className="w-full p-3 mt-6 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-all duration-200 ease-in-out flex items-center justify-center space-x-2"
+        >
+          <ArrowRightOnRectangleIcon className="w-5 h-5" />
+          <span>Logout</span>
+        </button>
       </div>
 
       {/* Chat area */}
