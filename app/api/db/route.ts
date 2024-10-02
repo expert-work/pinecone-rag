@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { getUser } from '@/app/lib/auth';
 
 export async function POST(req: Request) {
-  const user = await getUser();
-  if (!user) {
+  const userId = req.headers.get('X-User-Id');
+  if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -13,10 +12,10 @@ export async function POST(req: Request) {
   try {
     switch (action) {
       case 'findOrCreateChat':
-        const chat = await findOrCreateChat(user.id);
+        const chat = await findOrCreateChat(userId);
         return NextResponse.json(chat);
       case 'saveMessage':
-        const message = await saveMessage(data, user.id);
+        const message = await saveMessage(data, userId);
         return NextResponse.json(message);
       default:
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { getUser } from '@/app/lib/auth-server';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const user = await getUser();
-    if (!user) {
+    const userId = req.headers.get('X-User-Id');
+    if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -14,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const chat = await prisma.chat.findUnique({
       where: { 
         id: chatId,
-        userId: user.id  // Ensure the chat belongs to the current user
+        userId
       },
       include: {
         messages: {

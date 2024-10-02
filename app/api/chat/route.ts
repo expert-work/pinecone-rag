@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server';
 import { OpenAIStream, StreamingTextResponse } from 'ai';
-import { Pinecone, RecordMetadata, Index } from '@pinecone-database/pinecone';
 import { openai } from '@/app/lib/openai';
-import { getUser } from '@/app/lib/auth-server';
-import { prisma } from '@/app/lib/prisma';
+import { Pinecone, RecordMetadata, Index } from '@pinecone-database/pinecone';
 
 const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME ?? '';
 
@@ -12,86 +10,39 @@ type PineconeMetadata = RecordMetadata & {
 };
 
 export async function POST(req: NextRequest) {
-  const user = await getUser();
-  if (!user) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
-  }
-
-  if (!PINECONE_INDEX_NAME) {
-    console.error('PINECONE_INDEX_NAME is not defined in the environment variables');
-    return new Response(JSON.stringify({ error: 'Server configuration error' }), { status: 500 });
-  }
-
   try {
-    const { messages, chatId } = await req.json();
-    const query = messages[messages.length - 1].content;
+    const userId = req.headers.get('X-User-Id');
+    const { messages } = await req.json();
 
-    let chat;
-    if (chatId) {
-      chat = await prisma.chat.findUnique({
-        where: { id: chatId, userId: user.id },
-        include: { messages: true }
-      });
-      if (!chat) {
-        return new Response(JSON.stringify({ error: 'Chat not found' }), { status: 404 });
-      }
-    } else {
-      chat = await prisma.chat.create({
-        data: {
-          userId: user.id
-        }
-      });
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
     }
 
-    await prisma.message.create({
-      data: {
-        role: 'user',
-        content: query,
-        chatId: chat.id,
-      },
-    });
+    const query = messages[messages.length - 1].content;
 
-    let systemMessage;
+    const pinecone = new Pinecone();
+    const index = pinecone.Index<PineconeMetadata>(PINECONE_INDEX_NAME);
+
+    let systemMessage: string;
+    let relevantDocs: string[] = [];
 
     if (isGeneralQuery(query)) {
-      systemMessage = { role: 'system', content: getRandomGeneralSystemMessage() };
+      systemMessage = getGeneralSystemMessage();
     } else {
-      const pinecone = new Pinecone();
-      const index = pinecone.Index<PineconeMetadata>(PINECONE_INDEX_NAME);
-      const relevantDocs = await retrieveDocumentsFromPinecone(index, query);
-
-      if (relevantDocs.length === 0) {
-        systemMessage = {
-          role: 'system',
-          content: getRandomNoInfoSystemMessage()
-        };
-      } else {
-        systemMessage = { 
-          role: 'system', 
-          content: `You are a knowledgeable assistant with expertise in job markets and career information. Respond to the user's query using your knowledge, but do so in a natural, conversational manner. If you're not certain about something, it's okay to express uncertainty. Here's some relevant information to consider: ${relevantDocs.join(' ')}` 
-        };
-      }
+      relevantDocs = await retrieveDocumentsFromPinecone(index, query);
+      systemMessage = getInformedSystemMessage(relevantDocs);
     }
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemMessage },
+        ...messages
+      ],
       stream: true,
-      messages: [systemMessage, ...messages],
-      temperature: 0.7,
     });
 
-    const stream = OpenAIStream(response, {
-      async onCompletion(completion) {
-        await prisma.message.create({
-          data: {
-            role: 'assistant',
-            content: completion,
-            chatId: chat.id,
-          },
-        });
-      },
-    });
-
+    const stream = OpenAIStream(response);
     return new StreamingTextResponse(stream);
 
   } catch (error) {
@@ -100,20 +51,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// Helper functions
+
 function isGeneralQuery(query: string): boolean {
-  const generalPatterns = [
-    /^hello/i,
-    /^hi/i,
-    /^hey/i,
-    /^greetings/i,
-    /how are you/i,
-    /what's up/i,
-    /good (morning|afternoon|evening)/i,
-  ];
-  return generalPatterns.some(pattern => pattern.test(query));
+  // Implement logic to determine if the query is general or specific
+  return query.length < 10; // Example: consider short queries as general
 }
 
-async function retrieveDocumentsFromPinecone(index: Index<PineconeMetadata>, query: string) {
+async function retrieveDocumentsFromPinecone(index: Index<PineconeMetadata>, query: string): Promise<string[]> {
   const queryEmbedding = await getEmbedding(query);
 
   const queryResponse = await index.query({
@@ -137,20 +82,14 @@ async function getEmbedding(text: string) {
   return response.data[0].embedding;
 }
 
-function getRandomGeneralSystemMessage(): string {
-  const messages = [
-    "You are a friendly and helpful assistant. Engage in natural conversation while providing accurate information.",
-    "As an AI assistant, your goal is to be helpful and informative while maintaining a casual, human-like tone.",
-    "You're here to assist users with their questions. Be friendly, concise, and natural in your responses.",
-  ];
-  return messages[Math.floor(Math.random() * messages.length)];
+function getGeneralSystemMessage(): string {
+  return "You are a knowledgeable and helpful AI assistant. Provide accurate and relevant information to the user's queries in a natural, conversational manner. If you're unsure about something, it's okay to say so and suggest alternatives or ask for clarification.";
 }
 
-function getRandomNoInfoSystemMessage(): string {
-  const messages = [
-    "I don't have specific information about that. Could you provide more context or ask something else?",
-    "I'm not sure I have the right information to answer that. Can you rephrase or ask a different question?",
-    "That's an interesting question, but I don't have enough details to give a proper answer. Could you clarify or ask something else?",
-  ];
-  return messages[Math.floor(Math.random() * messages.length)];
+function getInformedSystemMessage(relevantDocs: string[]): string {
+  if (relevantDocs.length > 0) {
+    return `You are a knowledgeable AI assistant with a wide range of information at your disposal. Use your extensive knowledge to provide accurate and helpful responses. Engage in natural conversation and offer detailed explanations when appropriate. If you're unsure about something, it's okay to say so and suggest alternatives or ask for clarification. Here's some relevant information that might be helpful: ${relevantDocs.join(' ')}`;
+  } else {
+    return "You are a knowledgeable AI assistant. While you may not have specific information about every topic, use your general knowledge to provide helpful responses. If you're unsure about something, it's okay to say so and suggest alternatives or ask for clarification.";
+  }
 }

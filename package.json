@@ -9,9 +9,9 @@
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:migrate": "ts-node prisma/seed.ts"
-    
   },
   "dependencies": {
+    "@heroicons/react": "^2.1.5",
     "@langchain/openai": "^0.3.4",
     "@langchain/pinecone": "^0.1.0",
     "@neondatabase/serverless": "^0.9.5",
@@ -28,13 +28,15 @@
     "next": "14.2.14",
     "openai": "^4.67.0",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@types/html-to-text": "^9.0.4",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^8",
     "eslint-config-next": "14.2.14",

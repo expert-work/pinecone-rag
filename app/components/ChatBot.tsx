@@ -1,58 +1,59 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useChat, Message } from 'ai/react';
-import JobDetails from './JobDetails';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { getUser, signOut, supabase } from '@/app/lib/auth-client';
+import { getUser, supabase } from '@/app/lib/auth-client';
+import { DBMessage, Message, Chat } from '@/types/chat';
 import { User } from '@supabase/supabase-js';
+import { useChat } from 'ai/react';
+import { v4 as uuidv4 } from 'uuid';
+import { PlusIcon, PaperAirplaneIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
 
-interface Chat {
-  id: string;
-  messages: Message[];
-}
+const CHATS_PER_PAGE = 10;
 
-interface Job {
-  title: string;
-  description: string;
-  industry: string;
-  job_location_address_locality: string;
-  job_location_address_region: string;
-  base_salary_value: number;
-  base_salary_term: string;
-  employment_type: string;
-  experience_requirements: string;
-  education_requirements: string;
-}
- 
-const ChatBot: React.FC = () => {
-  const { messages, append, setMessages, isLoading: isAIProcessing } = useChat();
-  const [isAITyping, setIsAITyping] = useState(false);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [isPageLoaded, setIsPageLoaded] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isJobDetailsOpen, setIsJobDetailsOpen] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
+const ChatBot = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [lastChatId, setLastChatId] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatListRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
+  };
+
+  const { messages, input, handleInputChange, handleSubmit, setMessages, isLoading } = useChat({
+    api: '/api/chat',
+    headers: user ? { 'X-User-Id': user.id } : undefined,
+    body: { userId: user?.id, chatId: currentChatId },
+    onFinish: async (message) => {
+      if (currentChatId && user) {
+        await saveMessageToSupabase(currentChatId, convertVercelMessage(message));
+        await updateChatList();
+      }
+    },
+  });
 
   useEffect(() => {
     const checkUser = async () => {
+      console.log('Checking user...');
       const currentUser = await getUser();
       if (currentUser) {
+        console.log('User found:', currentUser);
         setUser(currentUser);
-        fetchChats();
-        setIsPageLoaded(true);
       } else {
+        console.log('No user found, redirecting to login');
         router.push('/login');
       }
     };
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      console.log('Auth state changed:', event);
       if (event === 'SIGNED_IN') {
         checkUser();
       } else if (event === 'SIGNED_OUT') {
@@ -69,364 +70,361 @@ const ChatBot: React.FC = () => {
   }, [router]);
 
   useEffect(() => {
-    if (isPageLoaded && user && !isInitialized) {
-      initializeChat();
+    if (user) {
+      fetchChats();
     }
-  }, [isPageLoaded, user, chats, isInitialized]);
+  }, [user]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  useEffect(() => {
-    if (isAIProcessing) {
-      setIsAITyping(false);
-      const typingTimeout = setTimeout(() => setIsAITyping(true), 1000);
-      return () => clearTimeout(typingTimeout);
-    } else {
-      setIsAITyping(false);
-    }
-  }, [isAIProcessing]);
-
-  const initializeChat = async () => {
-    setIsLoading(true);
-    try {
-      const storedChatId = localStorage.getItem('currentChatId');
-      if (storedChatId) {
-        try {
-          await loadChat(storedChatId);
-        } catch (error) {
-          console.error('Error loading chat:', error);
-          await createAndSetNewChat();
-        }
-      } else {
-        await createAndSetNewChat();
-      }
-    } catch (error) {
-      console.error('Error initializing chat:', error);
-    } finally {
-      setIsInitialized(true);
-      setIsLoading(false);
-    }
-  };
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const fetchChats = async () => {
+  const fetchChats = useCallback(async () => {
+    if (!user) {
+      console.log('No user, cannot fetch chats');
+      return;
+    }
+    console.log('Fetching chats for user:', user.id);
     try {
-      const response = await fetch('/api/chats', {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch chats');
+      let query = supabase
+        .from('Chat')
+        .select(`
+          id,
+          userId,
+          createdAt,
+          Message (
+            id,
+            content,
+            role,
+            createdAt,
+            chatId
+          )
+        `)
+        .eq('userId', user.id)
+        .order('createdAt', { ascending: false })
+        .limit(CHATS_PER_PAGE);
+
+      if (lastChatId) {
+        query = query.lt('id', lastChatId);
       }
-      const chats = await response.json();
-      setChats(chats);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+      console.log('Fetched chats:', data);
+      
+      if (data && data.length > 0) {
+        setChats(prevChats => {
+          const uniqueChats = new Set(prevChats.map(chat => chat.id));
+          const newChats = (data as Chat[])
+            .filter(chat => !uniqueChats.has(chat.id))
+            .map(chat => ({
+              ...chat,
+              Message: Array.isArray(chat.Message) ? chat.Message : []
+            }));
+          return [...prevChats, ...newChats];
+        });
+        setLastChatId(data[data.length - 1].id);
+        setHasMore(data.length === CHATS_PER_PAGE);
+      } else {
+        setHasMore(false);
+      }
     } catch (error) {
       console.error('Error fetching chats:', error);
     }
-  };
+  }, [user, lastChatId]);
 
-  const loadChat = async (chatId: string) => {
-    try {
-      const response = await fetch(`/api/chats/${chatId}`);
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error('Chat not found');
-        }
-        throw new Error('Failed to fetch chat messages');
-      }
-      const data = await response.json();
-      setCurrentChatId(chatId);
-      setMessages(data.messages || []);
-    } catch (error) {
-      console.error('Error loading chat:', error);
-      throw error;
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const input = form.elements.namedItem('message') as HTMLInputElement;
-    const message = input.value.trim();
-
-    if (!message) return;
-
-    if (!currentChatId) {
-      const newChatId = await createAndSetNewChat();
-      if (!newChatId) {
-        console.error('Failed to create a new chat. Please try again.');
-        return;
-      }
-    }
-
-    input.value = '';
-
-    await append({
-      content: message,
-      role: 'user',
-    }, {
-      options: {
-        body: {
-          chatId: currentChatId,
-        },
-      },
-    });
-
-    const lastAssistantMessage = messages[messages.length - 1];
-    if (lastAssistantMessage && lastAssistantMessage.role === 'assistant' && lastAssistantMessage.content.includes('Job Title:')) {
-      const jobDetails = parseJobDetails(lastAssistantMessage.content);
-      setSelectedJob(jobDetails);
-    } else {
-      setSelectedJob(null);
-    }
-
-    await updateChat(currentChatId!, messages);
-  };
-
-  const updateChat = async (chatId: string, messages: Message[]) => {
-    try {
-      await saveMessages(chatId, messages);
+  const loadMoreChats = useCallback(() => {
+    if (hasMore) {
       fetchChats();
-    } catch (error) {
-      console.error('Error updating chat:', error);
+    }
+  }, [hasMore, fetchChats]);
+
+  useEffect(() => {
+    const chatList = chatListRef.current;
+    if (chatList) {
+      const handleScroll = () => {
+        if (
+          chatList.scrollTop + chatList.clientHeight >= chatList.scrollHeight - 20 &&
+          hasMore
+        ) {
+          loadMoreChats();
+        }
+      };
+
+      chatList.addEventListener('scroll', handleScroll);
+      return () => chatList.removeEventListener('scroll', handleScroll);
+    }
+  }, [loadMoreChats, hasMore]);
+
+  const getChatTitle = (chat: Chat): string => {
+    if (!chat.Message || chat.Message.length === 0) {
+      return `New Chat ${chat.id.slice(0, 8)}...`;
+    }
+    const firstUserMessage = chat.Message.find(m => m.role === 'user');
+    if (firstUserMessage) {
+      return firstUserMessage.content.slice(0, 30) + (firstUserMessage.content.length > 30 ? '...' : '');
+    }
+    return `Chat ${chat.id.slice(0, 8)}...`;
+  };
+
+  const loadChat = (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (chat) {
+      setCurrentChatId(chatId);
+      setMessages(chat.Message.map(m => ({
+        id: m.id || uuidv4(),
+        role: m.role as Message['role'],
+        content: m.content,
+      })));
     }
   };
 
-  const saveMessages = async (chatId: string, messages: Message[]) => {
-    for (const message of messages) {
-      await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'saveMessage',
-          data: { role: message.role, content: message.content, chatId },
-        }),
-      });
-    }
-  };
-
-  const parseJobDetails = (content: string): Job => {
-    const lines = content.split('\n');
-    const jobDetails: Partial<Job> = {};
-
-    lines.forEach(line => {
-      const [key, value] = line.split(':').map(s => s.trim());
-      switch (key) {
-        case 'Job Title':
-          jobDetails.title = value;
-          break;
-        case 'Description':
-          jobDetails.description = value;
-          break;
-        case 'Industry':
-          jobDetails.industry = value;
-          break;
-        case 'Location':
-          const [locality, region] = value.split(',').map(s => s.trim());
-          jobDetails.job_location_address_locality = locality;
-          jobDetails.job_location_address_region = region;
-          break;
-        case 'Salary':
-          const [amount, term] = value.split('per').map(s => s.trim());
-          jobDetails.base_salary_value = parseFloat(amount.replace('$', ''));
-          jobDetails.base_salary_term = term;
-          break;
-        case 'Employment Type':
-          jobDetails.employment_type = value;
-          break;
-        case 'Experience Required':
-          jobDetails.experience_requirements = value;
-          break;
-        case 'Education':
-          jobDetails.education_requirements = value;
-          break;
-      }
-    });
-
-    return jobDetails as Job;
-  };
-
-  const handleLogout = async () => {
-    await signOut();
-    router.push('/login');
-  };
-
-  const createAndSetNewChat = async () => {
+  const createNewChat = async () => {
+    if (!user) return null;
+    console.log('Creating new chat for user:', user.id);
     try {
-      const response = await fetch('/api/chats', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ forceNew: true }),
-      });
+      const newChatId = uuidv4();
+      const newChat = {
+        id: newChatId,
+        userId: user.id,
+      };
+      const { data, error } = await supabase
+        .from('Chat')
+        .insert(newChat)
+        .select()
+        .single();
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Error response from server:', errorData);
-        throw new Error(`Failed to create a new chat: ${response.status} ${response.statusText}`);
-      }
-
-      const newChat = await response.json();
-      setCurrentChatId(newChat.id);
-      localStorage.setItem('currentChatId', newChat.id);
+      if (error) throw error;
+      console.log('Created new chat:', data);
+      setCurrentChatId(newChatId);
       setMessages([]);
-      setSelectedJob(null);
-      await fetchChats();
-      return newChat.id;
+      setChats(prevChats => [{...data as Chat, Message: []}, ...prevChats]);
+      return newChatId;
     } catch (error) {
       console.error('Error creating new chat:', error);
-      setCurrentChatId(null);
-      localStorage.removeItem('currentChatId');
       return null;
     }
   };
 
-  const startNewConversation = async () => {
-    setIsLoading(true);
-    try {
-      const deleteResponse = await fetch('/api/chats', { method: 'DELETE' });
-      if (!deleteResponse.ok) {
-        console.error('Failed to delete empty chats');
-      } else {
-        const deleteData = await deleteResponse.json();
-        console.log(`Deleted ${deleteData.deletedCount} empty chats`);
-      }
+  const convertVercelMessage = (vercelMessage: Message): DBMessage => {
+    let role: 'user' | 'assistant' | 'system';
+    
+    switch (vercelMessage.role) {
+      case 'user':
+      case 'assistant':
+      case 'system':
+        role = vercelMessage.role;
+        break;
+      case 'function':
+      case 'data':
+      case 'tool':
+        role = 'system';  // Map these roles to 'system'
+        break;
+      default:
+        console.warn(`Unknown message role: ${vercelMessage.role}`);
+        role = 'system';  // Default to 'system' for unknown roles
+    }
 
-      await createAndSetNewChat();
+    return {
+      role: role,
+      content: vercelMessage.content,
+    };
+  };
+
+  const saveMessageToSupabase = async (chatId: string, message: DBMessage) => {
+    console.log('Saving message to Supabase:', message);
+    try {
+      const { data, error } = await supabase
+        .from('Message')
+        .insert({
+          chatId: chatId,
+          role: message.role,
+          content: message.content,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setChats(prevChats => 
+        prevChats.map(chat => 
+          chat.id === chatId 
+            ? { 
+                ...chat, 
+                Message: [...(chat.Message || []), data as DBMessage]
+              }
+            : chat
+        )
+      );
     } catch (error) {
-      console.error('Error starting new conversation:', error);
-    } finally {
-      setIsLoading(false);
+      console.error('Error saving message to Supabase:', error);
     }
   };
 
-  const selectChat = async (chat: Chat) => {
-    setCurrentChatId(chat.id);
-    localStorage.setItem('currentChatId', chat.id);
-    await loadChat(chat.id);
-    setSelectedJob(null);
+  const updateChatList = async () => {
+    if (currentChatId) {
+      const { data, error } = await supabase
+        .from('Chat')
+        .select(`
+          id,
+          userId,
+          createdAt,
+          Message (
+            id,
+            content,
+            role,
+            createdAt,
+            chatId
+          )
+        `)
+        .eq('id', currentChatId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching updated chat:', error);
+        return;
+      }
+
+      setChats(prevChats => {
+        const updatedChats = prevChats.filter(chat => chat.id !== currentChatId);
+        return [data as Chat, ...updatedChats];
+      });
+    }
   };
 
-  const toggleSidebar = () => {
-    setIsSidebarOpen(!isSidebarOpen);
+  const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    let chatId = currentChatId;
+    
+    if (!chatId) {
+      const newChatId = await createNewChat();
+      if (newChatId) {
+        chatId = newChatId;
+        setCurrentChatId(newChatId);
+      } else {
+        console.error('Failed to create new chat');
+        return;
+      }
+    }
+    
+    if (chatId) {
+      await saveMessageToSupabase(chatId, {
+        role: 'user',
+        content: input,
+      });
+      
+      await handleSubmit(e);
+    }
   };
-
-  const toggleJobDetails = () => {
-    setIsJobDetailsOpen(!isJobDetailsOpen);
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-white">
-        <div className="text-center">
-          <div className="inline-block p-4 rounded-lg bg-gray-200 animate-pulse">
-            Loading...
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col h-screen bg-white md:flex-row">
-      {/* Mobile header */}
-      <div className="md:hidden flex justify-between items-center p-4 bg-gray-100 border-b border-gray-300">
-        <button onClick={toggleSidebar} className="text-black">
-          ☰ Menu
+    <div className="flex h-screen bg-white text-black">
+      {/* Mobile sidebar toggle */}
+      <button
+        onClick={toggleSidebar}
+        className="md:hidden fixed top-4 left-4 z-20 p-2 bg-black text-white rounded-full"
+      >
+        <ChatBubbleLeftIcon className="w-6 h-6" />
+      </button>
+
+      {/* Chat history sidebar */}
+      <div 
+        ref={chatListRef}
+        className={`${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:translate-x-0 fixed md:static inset-y-0 left-0 w-64 md:w-80 bg-gray-50 p-4 overflow-y-auto border-r border-gray-200 shadow-lg transition-transform duration-300 ease-in-out z-10`}
+      >
+        <button
+          onClick={createNewChat}
+          className="w-full p-3 mb-6 bg-black text-white rounded-lg hover:bg-gray-800 transition-all duration-200 ease-in-out flex items-center justify-center space-x-2 shadow-md"
+        >
+          <PlusIcon className="w-5 h-5" />
+          <span>New Chat</span>
         </button>
-        <h1 className="text-xl font-bold">AI Chat Bot</h1>
-        {selectedJob && (
-          <button onClick={toggleJobDetails} className="text-black">
-            Job Details
+        {chats.length === 0 ? (
+          <p className="text-gray-500 italic text-center">No chats available</p>
+        ) : (
+          <div className="space-y-2">
+            {chats.map((chat) => (
+              <div
+                key={chat.id}
+                onClick={() => {
+                  loadChat(chat.id);
+                  setIsSidebarOpen(false);
+                }}
+                className={`p-3 cursor-pointer rounded-lg transition-all duration-200 ease-in-out ${
+                  chat.id === currentChatId 
+                    ? 'bg-gray-200 shadow-inner' 
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                {getChatTitle(chat)}
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore && (
+          <button 
+            onClick={loadMoreChats}
+            className="w-full p-2 mt-4 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-all duration-200 ease-in-out"
+          >
+            Load More
           </button>
         )}
       </div>
 
-      {/* Sidebar */}
-      <div className={`w-full md:w-64 bg-gray-100 text-black p-4 overflow-y-auto border-r border-gray-300 ${isSidebarOpen ? 'block' : 'hidden'} md:block`}>
-        <h2 className="text-xl font-bold mb-4">Conversations</h2>
-        <button
-          onClick={() => {
-            startNewConversation();
-            setIsSidebarOpen(false);
-          }}
-          className="w-full p-2 mb-4 bg-black text-white rounded hover:bg-gray-800 transition-colors"
-        >
-          New Conversation
-        </button>
-        {chats.map(chat => (
-          <div
-            key={chat.id}
-            className={`p-2 hover:bg-gray-200 cursor-pointer rounded transition-colors ${chat.id === currentChatId ? 'bg-gray-300' : ''}`}
-            onClick={() => {
-              selectChat(chat);
-              setIsSidebarOpen(false);
-            }}
-          >
-            {chat.messages[0]?.content.substring(0, 30)}...
-          </div>
-        ))}
-        <button
-          onClick={handleLogout}
-          className="w-full p-2 mt-4 bg-gray-300 text-black rounded hover:bg-gray-400 transition-colors"
-        >
-          Logout
-        </button>
-      </div>
-
-      {/* Main chat area */}
-      <div className="flex-1 flex flex-col">
-        <div className="flex-1 overflow-y-auto p-4 bg-white">
+      {/* Chat area */}
+      <div className="flex-1 flex flex-col bg-white">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
           {messages.map((message, index) => (
-            <div key={index} className={`mb-4 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
-              <div className={`inline-block p-2 rounded-lg ${message.role === 'user' ? 'bg-black text-white' : 'bg-gray-200 text-black'}`}>
+            <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] md:max-w-[70%] p-3 rounded-lg ${
+                message.role === 'user' 
+                  ? 'bg-black text-white rounded-br-none' 
+                  : 'bg-gray-100 text-black rounded-bl-none'
+              }`}>
                 {message.content}
               </div>
             </div>
           ))}
-          {isAIProcessing && (
-            <div className="text-left mb-4">
-              <div className="inline-block p-2 rounded-lg bg-gray-200 animate-pulse">
-                {isAITyping ? 'AI is typing...' : 'AI is thinking...'}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="bg-gray-100 text-black rounded-lg rounded-bl-none p-3 max-w-[85%] md:max-w-[70%]">
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.4s'}}></div>
+                </div>
               </div>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
-
-        <form onSubmit={handleSubmit} className="p-4 bg-gray-100 border-t border-gray-300">
-          <div className="flex">
+        <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-200 bg-white">
+          <div className="flex items-center space-x-2">
             <input
               type="text"
-              name="message"
+              value={input}
+              onChange={handleInputChange}
+              className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black transition-all duration-200 ease-in-out"
               placeholder="Type your message..."
-              className="flex-1 p-2 rounded-l-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-200"
             />
             <button 
               type="submit" 
-              className="px-4 rounded-r-lg bg-black text-white font-bold p-2 uppercase border-black hover:bg-gray-800 transition-colors"
-              disabled={isAIProcessing}
+              className="p-3 bg-black text-white rounded-lg hover:bg-gray-800 transition-all duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isLoading}
             >
-              {isAIProcessing ? 'Wait...' : 'Send'}
+              <PaperAirplaneIcon className="w-5 h-5" />
             </button>
           </div>
         </form>
       </div>
-
-      {/* Job details sidebar */}
-      {selectedJob && (
-        <div className={`w-full md:w-1/3 p-4 bg-white border-l border-gray-300 overflow-y-auto ${isJobDetailsOpen ? 'block' : 'hidden'} md:block`}>
-          <JobDetails job={selectedJob} />
-        </div>
-      )}
     </div>
   );
 };
